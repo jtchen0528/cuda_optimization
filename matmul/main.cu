@@ -199,9 +199,9 @@ int main (int argc, char **argv) {
     // uint16_t N = BLOCKDIM * BLOCKDIM;
     // uint16_t P = BLOCKDIM * BLOCKDIM;
 
-    uint16_t M = BLOCKDIM * 7;
-    uint16_t N = BLOCKDIM * 7;
-    uint16_t P = BLOCKDIM * 7;
+    uint16_t M = BLOCKDIM * BLOCKDIM;
+    uint16_t N = BLOCKDIM * BLOCKDIM;
+    uint16_t P = BLOCKDIM * BLOCKDIM;
 
     dim3 blockDim(BLOCKDIM, BLOCKDIM, 1);
     dim3 gridDim((P + BLOCKDIM - 1) / BLOCKDIM, (M + BLOCKDIM - 1) / BLOCKDIM, 1);
@@ -232,12 +232,12 @@ int main (int argc, char **argv) {
     cudaMemcpy(B_device, B, sizeof(float) * Bsize, cudaMemcpyHostToDevice);
     cudaMemcpy(Z_device, Z, sizeof(float) * Zsize, cudaMemcpyHostToDevice);
 
-    // matmul_tiled<<<gridDim, blockDim>>>(A_device, B_device, Z_device, M, N, P);
-    execute_transposed_matmul(gridDim, blockDim, A_device, B_device, Z_device, M, N, P);
+    matmul_tiled<<<gridDim, blockDim>>>(A_device, B_device, Z_device, M, N, P);
+    // execute_transposed_matmul(gridDim, blockDim, A_device, B_device, Z_device, M, N, P);
     cudaDeviceSynchronize();
 
     cudaMemcpy(Z, Z_device, sizeof(float) * Zsize, cudaMemcpyDeviceToHost);
-    print2DArray(Z, 1, P);
+    // print2DArray(Z, 1, P);
     // print2DArray(B, N, P);
     // dim3 gridDimT((P + BLOCKDIM - 1) / BLOCKDIM, (N + BLOCKDIM - 1) / BLOCKDIM, 1);
     // transpose<<<gridDimT, blockDim>>>(B_device, Z_device, N, P);
@@ -245,7 +245,7 @@ int main (int argc, char **argv) {
     // // // print2DArray(A, M, N);
     // print2DArray(B, P, N);
 
-    print2DArray(Z_ref, 1, P);
+    // print2DArray(Z_ref, 1, P);
     check2DArray(Z, Z_ref, M, P);
 
 
