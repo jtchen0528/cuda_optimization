@@ -10,13 +10,13 @@ Perf|5.056us|3.169us|2.688us|3.360us|1.696us|1.552us|1.488us|0.384us
 speedup|1x|1.6x|1.9x|1.5x|3.0x|3.3x|3.4x|13.2x
 
 ## Matrix Multiplication
-algo|naive|tiled | Transpose | Naive Transposed
----|---|---|---|---
-sm|N|Y|Y|N
-GridDim|1024|1024|1024|1024|1024|1024|1024|1024
-N|1024 * 1024|1024 * 1024|1024 * 1024|1024 * 1024
-T|2.717ms|1.854ms|6.094ms|17.268ms
-speedup|1x|1.5x|0.4x|0.2x
+algo|naive|tiled 
+---|---|---
+sm|N|Y|Y
+GridDim|1024|1024|1024
+N|1024 * 1024|1024 * 1024
+T|2.717ms|1.854ms
+speedup|1x|1.5x
 <!-- Perf|5.056us|3.169us
 speedup|1x|1.6x|1.9x -->
 
@@ -42,3 +42,26 @@ GridDim|1|1|1
 N| 1024 | 1024 | 1024
 T|9,024 ns|4,992ns|2,752 ns
 speedup|1x|1.81x|3.3x
+
+## Sort
+
+algo|naive|naive warp diverge optimized|naive warp sm|naive warp sm coleased|naive bitonic sort|naive bitonic sort sm|naive merge sort
+---|---|---|---|---|---|---|---
+sm|N|N|Y|Y|N|Y|N
+N|1024|1024|1024|1024|1024|1024|1024
+T|253,024ns|157,216ns|90,336ns|90,752ns|35,648ns|31,552ns|142,720ns+11,872ns
+
+* note: coleased use half threads but sync waits. No hiding in swapping 2 elements
+* bitonic sort can be optimized with warp divergence
+
+## copy
+algo|naive|naive colease
+---|---|---
+N|1024*1024|1024*1024
+T|27,424ns|21,920ns
+
+## transpose
+algo|transpose Naive|transpose coleased|transposed coleased no bank conflict
+---|---|---|---
+N|1024*1024|1024*1024|1024*1024
+T|71,264ns|26,720ns|21,088ns

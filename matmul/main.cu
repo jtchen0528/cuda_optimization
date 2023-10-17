@@ -8,6 +8,8 @@
 #include <cuda_runtime.h>
 #include <cuda_profiler_api.h>
 
+// Refer: https://developer.nvidia.com/blog/efficient-matrix-transpose-cuda-cc/
+
 const int WARPSIZE = 32;
 const int BLOCKDIM = 32;
 
@@ -92,20 +94,6 @@ __global__ void naive_transposed(float * A, float * B, float * Z, int m, int n, 
     }
 }
 
-__global__ void transpose(float * A, int m, int n) {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = blockIdx.y * blockDim.y + threadIdx.y;
-    float tmp = 0.0f;
-    if (i < m && j < n) {
-        tmp = A[i * n + j];
-    }
-    __syncthreads();
-    if (i < m && j < n) {
-        A[j * m + i] = tmp;
-    }
-}
-
-
 __global__ void matmul_tiled(float * A, float * B, float * Z, int m, int n, int p) {
     __shared__ float A_shared [BLOCKDIM][BLOCKDIM];
     __shared__ float B_shared [BLOCKDIM][BLOCKDIM];
@@ -141,56 +129,6 @@ __global__ void matmul_tiled(float * A, float * B, float * Z, int m, int n, int 
         Z[i * p + j] = sum;
     }
 }
-
-__global__ void matmul_tiled_transposed(float * A, float * B, float * Z, int m, int n, int p) {
-    __shared__ float A_shared [BLOCKDIM][BLOCKDIM];
-    __shared__ float B_shared [BLOCKDIM][BLOCKDIM];
-
-    size_t tileIdx = (n + BLOCKDIM - 1) / BLOCKDIM;
-    int i, j;
-    float sum = 0.0f;
-    for (int tid = 0; tid < tileIdx; tid++) {
-        j = tid * blockDim.x + threadIdx.x;
-        i = blockIdx.y * blockDim.y + threadIdx.y;
-        if (i < m && j < n) {
-            A_shared[threadIdx.y][threadIdx.x] = A[i * n + j];
-        } else {
-            A_shared[threadIdx.y][threadIdx.x] = 0;
-        }
-
-        j = blockIdx.x * blockDim.x + threadIdx.x;
-        i = tid * blockDim.y + threadIdx.y;
-        if (i < n && j < p) {
-            B_shared[threadIdx.x][threadIdx.y] = B[j * n + i];
-        } else {
-            B_shared[threadIdx.x][threadIdx.y] = 0;
-        }
-        __syncthreads();
-        for (int k = 0; k < BLOCKDIM; k++) {
-            sum += A_shared[threadIdx.y][k] * B_shared[threadIdx.x][k];
-        }
-        __syncthreads();
-    }
-    j = blockIdx.x * blockDim.x + threadIdx.x;
-    i = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < m && j < p) {
-        Z[i * p + j] = sum;
-    }
-}
-
-void execute_transposed_matmul(dim3 gridDim, dim3 blockDim, float * A, float * B, float * Z, int m, int n, int p){
-    dim3 gridDimT((p + BLOCKDIM - 1) / BLOCKDIM, (n + BLOCKDIM - 1) / BLOCKDIM, 1);
-    transpose<<<gridDimT, blockDim>>>(B, n, p);
-    matmul_tiled_transposed<<<gridDim, blockDim>>>(A, B, Z, m, n, p);
-}
-
-void execute_naive_transposed_matmul(dim3 gridDim, dim3 blockDim, float * A, float * B, float * Z, int m, int n, int p){
-    dim3 gridDimT((p + BLOCKDIM - 1) / BLOCKDIM, (n + BLOCKDIM - 1) / BLOCKDIM, 1);
-    transpose<<<gridDimT, blockDim>>>(B, n, p);
-    naive_transposed<<<gridDim, blockDim>>>(A, B, Z, m, n, p);
-}
-
-
 
 int main (int argc, char **argv) {
     printf("CUDA reduciton test\n");
@@ -233,7 +171,6 @@ int main (int argc, char **argv) {
     cudaMemcpy(Z_device, Z, sizeof(float) * Zsize, cudaMemcpyHostToDevice);
 
     matmul_tiled<<<gridDim, blockDim>>>(A_device, B_device, Z_device, M, N, P);
-    // execute_transposed_matmul(gridDim, blockDim, A_device, B_device, Z_device, M, N, P);
     cudaDeviceSynchronize();
 
     cudaMemcpy(Z, Z_device, sizeof(float) * Zsize, cudaMemcpyDeviceToHost);
@@ -252,3 +189,4 @@ int main (int argc, char **argv) {
 
     return 0;
 }
+// 1,813,567  1,821,054  1,818,687

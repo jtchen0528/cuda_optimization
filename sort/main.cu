@@ -8,6 +8,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_profiler_api.h>
+#include <cooperative_groups.h>
+
+using namespace cooperative_groups;
 
 const int WARPSIZE = 32;
 const int WARPSIZE_LOG2 = 5;
@@ -73,14 +76,297 @@ void sort_serial(float *&A, float *&Z, int N) {
     }
 }
 
-__global__ 
+__inline__ __device__ void swap_float(float *A, int i, int j) {
+    float tmp = A[i];
+    A[i] = A[j];
+    A[j] = tmp;
+}
+
+__inline__ __device__ void swap_float_volatile(volatile float *A, int i, int j) {
+    float tmp = A[i];
+    A[i] = A[j];
+    A[j] = tmp;
+}
+
+__global__ void sort_naive(float *A, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int it = 0; it < N; it++) {
+        if ((idx & 1) == (it & 1)) {
+            if ((idx + 1 < N) && (A[idx] > A[idx + 1])) {
+                swap_float(A, idx, idx + 1);
+            }
+        }
+        __syncthreads();
+    }
+}
+
+__global__ void sort_naive_multi_block(float *A, int N) {
+    grid_group g = this_grid();
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int it = 0; it < N; it++) {
+        if ((idx & 1) == (it & 1)) {
+            if ((idx + 1 < N) && (A[idx] > A[idx + 1])) {
+                swap_float(A, idx, idx + 1);
+            }
+        }
+        // __syncthreads();
+        // break;
+        g.sync();
+    }
+    // A[idx] = N;
+}
+
+__global__ void sort_naive_warp_optimized(float *A, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    grid_group g = this_grid();
+
+    // A[idx] = 0;
+    for (int it = 0; it < N; it++) {
+        int oddeven = it & 1;
+        int swap_idx = (idx << 1) + oddeven;
+        if (swap_idx + 1 < N && A[swap_idx] > A[swap_idx + 1]) {
+            swap_float(A, swap_idx, swap_idx + 1);
+            // A[swap_idx] = idx;
+        }
+        g.sync();
+        // break;
+    }
+}
+
+
+__global__ void sort_naive_warp_optimized_naive_sm(float *A, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    __shared__ float smA [BLOCKSIZE];
+    int load_idx = idx << 1;
+    smA[load_idx] = A[load_idx];
+    smA[load_idx + 1] = A[load_idx + 1];
+    __syncthreads();
+    // A[idx] = 0;
+    for (int it = 0; it < N; it++) {
+        int oddeven = it & 1;
+        int swap_idx = (idx << 1) + oddeven;
+        if (swap_idx + 1 < N && smA[swap_idx] > smA[swap_idx + 1]) {
+            swap_float(smA, swap_idx, swap_idx + 1);
+            // A[swap_idx] = idx;
+        }
+        __syncthreads();
+        // break;
+    }
+
+    A[load_idx] = smA[load_idx];
+    A[load_idx + 1] = smA[load_idx + 1];
+    __syncthreads();
+
+}
+
+__global__ void sort_naive_warp_optimized_sm(float *A, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    __shared__ float smA [BLOCKSIZE];
+    float4 tmp;
+    if (idx < (blockDim.x >> 1)) {
+        int load_idx = idx << 2;
+        tmp = make_float4(A[load_idx], A[load_idx + 1], A[load_idx + 2], A[load_idx + 3]);
+        smA[load_idx] = tmp.x;
+        smA[load_idx + 1] = tmp.y;
+        smA[load_idx + 2] = tmp.z;
+        smA[load_idx + 3] = tmp.w;
+    }
+    __syncthreads();
+    // A[idx] = 0;
+    for (int it = 0; it < N; it++) {
+        int oddeven = it & 1;
+        int swap_idx = (idx << 1) + oddeven;
+        if (swap_idx + 1 < N && smA[swap_idx] > smA[swap_idx + 1]) {
+            swap_float(smA, swap_idx, swap_idx + 1);
+            // A[swap_idx] = idx;
+        }
+        __syncthreads();
+        // break;
+    }
+
+    if (idx < (blockDim.x >> 1)) {
+        int load_idx = idx << 2;
+        tmp = make_float4(smA[load_idx], smA[load_idx + 1], smA[load_idx + 2], smA[load_idx + 3]);
+        A[load_idx] = tmp.x;
+        A[load_idx + 1] = tmp.y;
+        A[load_idx + 2] = tmp.z;
+        A[load_idx + 3] = tmp.w;
+    }
+    __syncthreads();
+
+}
+
+
+__global__ void odd_even_merge_sort_naive(float *A, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // A[idx] = idx;
+    for (int stride = 1; stride < N; stride <<= 1) {
+        int curr_stride = stride;
+        while (curr_stride >= 1) {
+            int curr_stride_2 = curr_stride << 1;
+            int curr_stride_4 = curr_stride << 2;
+            if ((idx % (curr_stride_4)) < curr_stride) {
+                if (A[idx] > A[idx + curr_stride]) {
+                    swap_float(A, idx, idx + curr_stride);
+                }
+            }
+            else if ((idx % (curr_stride_4)) >= (curr_stride_4 - curr_stride)) {
+                if (A[idx] > A[idx - curr_stride]) {
+                    swap_float(A, idx, idx - curr_stride);
+                }
+            }
+            curr_stride >>= 1;
+            __syncthreads();
+        }
+    }
+
+    for (int stride = (N >> 1); stride >= 1; stride >>= 1) {
+        if (idx % (stride << 1) < stride) {
+            if (A[idx] > A[idx + stride]) {
+                swap_float(A, idx, idx + stride);
+            }
+        }
+        __syncthreads();
+    }
+}
+
+__global__ void odd_even_merge_sort_sm(float *A, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int tidx = threadIdx.x;
+    __shared__ float smA [BLOCKSIZE];
+    smA[tidx] = A[idx];
+    __syncthreads();
+
+    // A[idx] = 0;
+    for (int stride = 1; stride < N; stride <<= 1) {
+        int curr_stride = stride;
+        while (curr_stride >= 1) {
+            int curr_stride_2 = curr_stride << 1;
+            int curr_stride_4 = curr_stride << 2;
+            if ((tidx % (curr_stride_4)) < curr_stride) {
+                if (smA[tidx] > smA[tidx + curr_stride]) {
+                    swap_float(smA, tidx, tidx + curr_stride);
+                }
+            }
+            else if ((tidx % (curr_stride_4)) >= (curr_stride_4 - curr_stride)) {
+                if (smA[tidx] > smA[tidx - curr_stride]) {
+                    swap_float(smA, tidx, tidx - curr_stride);
+                }
+            }
+            curr_stride >>= 1;
+            __syncthreads();
+        }
+    }
+
+    for (int stride = (N >> 1); stride >= 1; stride >>= 1) {
+        if (tidx % (stride << 1) < stride) {
+            if (smA[tidx] > smA[tidx + stride]) {
+                swap_float(smA, tidx, tidx + stride);
+            }
+        }
+        __syncthreads();
+    }
+
+    
+    A[idx] = smA[tidx];
+    __syncthreads();
+}
+
+__device__ void odd_even_merge_sort_first_levels(volatile float *smA, int N, int tidx) {
+
+    // A[idx] = 0;
+    for (int stride = 1; stride < N; stride <<= 1) {
+        int curr_stride = stride;
+        while (curr_stride >= 1) {
+            int curr_stride_2 = curr_stride << 1;
+            int curr_stride_4 = curr_stride << 2;
+            if ((tidx % (curr_stride_4)) < curr_stride) {
+                if (smA[tidx] > smA[tidx + curr_stride]) {
+                    swap_float_volatile(smA, tidx, tidx + curr_stride);
+                }
+            }
+            else if ((tidx % (curr_stride_4)) >= (curr_stride_4 - curr_stride)) {
+                if (smA[tidx] > smA[tidx - curr_stride]) {
+                    swap_float_volatile(smA, tidx, tidx - curr_stride);
+                }
+            }
+            curr_stride >>= 1;
+            __syncthreads();
+        }
+    }
+    
+}
+
+__global__ void odd_even_merge_sort_multi_block(float *A, int N) {
+    __shared__ float smA [BLOCKSIZE];
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int tidx = threadIdx.x;
+    smA[tidx] = A[idx];
+    __syncthreads();
+
+    odd_even_merge_sort_first_levels(smA, blockDim.x, tidx);
+
+    A[idx] = smA[tidx];
+    __syncthreads();
+}
+
+
+
+
+__global__ void merge_sort_kernel (float *A, float *scratch, int N, int chunksize) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int half_chunksize = chunksize >> 1;
+    int lh = idx * chunksize, rh = lh + half_chunksize;
+    int li = 0, ri = 0;
+
+    if (lh < N) {
+        while (li < half_chunksize && ri < half_chunksize) {
+            int pos = lh + li + ri;
+            int lv = A[lh + li], rv = A[rh + ri];
+            if (lv < rv) {
+                scratch[pos] = lv;
+                li++;
+            } else {
+                scratch[pos] = rv;
+                ri++;
+            }
+        }
+
+        while (li < half_chunksize) {
+            scratch[lh + li + ri] = A[lh + li];
+            li++;
+        }
+
+        while (ri < half_chunksize) {
+            scratch[lh + li + ri] = A[rh + ri];
+            ri++;
+        }
+    }
+    // A[idx] = idx;
+}
+
+void merge_sort(float *&A, float *&scratch, int N) {
+    int chunksize = 2;
+    int chunk = N >> 1;
+    while (chunk > 0) {
+        int blockcnt = (chunk + BLOCKSIZE - 1) / BLOCKSIZE;
+        // std::cout << blockcnt << " " << chunk << " " << chunksize << std::endl;
+        merge_sort_kernel<<<blockcnt, BLOCKSIZE>>>(A, scratch, N, chunksize);
+        chunk >>= 1;
+        chunksize <<= 1;
+        cudaMemcpy(A, scratch, sizeof(float) * N, cudaMemcpyDeviceToDevice);
+        // break;
+    }
+}
+
 
 int main (int argc, char **argv) {
     printf("CUDA exclusive scan test\n");
 
-    uint16_t N = BLOCKSIZE;
+    int N = BLOCKSIZE * 1;
 
-    int blocks = 1;
+    int blocks = (N + BLOCKSIZE - 1) / BLOCKSIZE;
 
     float *input = new float[N];
     float *output = new float[N];
@@ -88,17 +374,25 @@ int main (int argc, char **argv) {
     float *input_ref = new float[N];
     float *input_device = NULL, *output_device = NULL;
 
-    for (uint16_t i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++) {
         input[i] = N - i;
         input_ref[i] = N - i;
         output[i] = 0.0f;
         output_ref[i] = 0.0f;
     }
     
+    int dev = 0;
+    int supportsCoopLaunch = 0;
+    cudaDeviceGetAttribute(&supportsCoopLaunch, cudaDevAttrCooperativeLaunch, dev);
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, dev);
+
+    std::cout << "supportsCoopLaunch: " << supportsCoopLaunch << " deviceProp.multiProcessorCount: " << deviceProp.multiProcessorCount << std::endl;
+
     // printArray(input, N);
-    sort_serial(input, output_ref, N);
+    sort_serial(input_ref, output_ref, N);
     // printArray(input, N);
-    printArray(output_ref, N);
+    // printArray(output_ref, N);
 
     cudaMalloc(&input_device, sizeof(float) * N);
     cudaMalloc(&output_device, sizeof(float) * N);
@@ -106,10 +400,15 @@ int main (int argc, char **argv) {
     cudaMemcpy(input_device, input, sizeof(float) * N, cudaMemcpyHostToDevice);
     cudaMemcpy(output_device, output, sizeof(float) * N, cudaMemcpyHostToDevice);
 
-    // prefixsum_naive_sm<<<blocks, BLOCKSIZE>>>(input_device, output_device, N);
-    // cudaDeviceSynchronize();
+    // initialize, then launch
+    // void *kernelArgs[] = { (void *)&input_device, (void *)&N};
 
-    cudaMemcpy(output, output_device, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    // cudaLaunchCooperativeKernel((void*)sort_naive_multi_block, blocks, BLOCKSIZE, kernelArgs);
+    sort_naive <<<blocks, BLOCKSIZE>>> (input_device, N);
+    // merge_sort(input_device, output_device, N);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(output, input_device, sizeof(float) * N, cudaMemcpyDeviceToHost);
 
     // printArray(output, N);
 
