@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string>
 #include <iostream>
+#include <cassert>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -149,13 +150,48 @@ __global__ void unroll_all(float *input, float *ans) {
 }
 
 
+__global__ void l1cache_multi_add(float *input, float *ans) {
+    __shared__ float sinput [BLOCKSIZE];
+    int tid = threadIdx.x;
+    int index = blockIdx.x * (blockDim.x * 8) + threadIdx.x;
+    index <<= 2;
+    sinput[tid] = input[index] + input[index + 1] + input[index + 2] + input[index + 3];
+    sinput[tid] += input[index + 4 * blockDim.x] + input[index + 4 * blockDim.x + 1] + input[index + 4 * blockDim.x + 2] + input[index + 4 * blockDim.x + 3];
+    __syncthreads();
+
+    if (tid < 512) sinput[tid] += sinput[tid + 512];
+    __syncthreads();
+    if (tid < 256) sinput[tid] += sinput[tid + 256];
+    __syncthreads();
+    if (tid < 128) sinput[tid] += sinput[tid + 128];
+    __syncthreads();
+    if (tid < 64) sinput[tid] += sinput[tid + 64];
+    __syncthreads();
+
+    unroll_last_warp(sinput);
+    // input[threadIdx.x] = sinput[tid];
+
+    if (tid == 0) {
+        ans[0] = sinput[tid];
+    }
+}
+
 
 __global__ void coalesce_add(float *input, float *ans) {
     __shared__ float sinput [BLOCKSIZE];
     int tid = threadIdx.x;
-    int index = blockIdx.x * (blockDim.x * 8) + threadIdx.x;
-    sinput[tid] = input[index] + input[index + 1] + input[index + 2] + input[index + 3];
-    sinput[tid] += input[index + 4 * blockDim.x] + input[index + 4 * blockDim.x + 1] + input[index + 4 * blockDim.x + 2] + input[index + 4 * blockDim.x + 3];
+    unsigned index = blockIdx.x * (blockDim.x * 5) + threadIdx.x;
+
+    sinput[tid] += input[index];
+    sinput[tid] += input[index + BLOCKSIZE];
+    sinput[tid] += input[index + BLOCKSIZE * 2];
+    sinput[tid] += input[index + BLOCKSIZE * 3];
+    sinput[tid] += input[index + BLOCKSIZE * 4];
+    sinput[tid] += input[index + BLOCKSIZE * 5];
+    sinput[tid] += input[index + BLOCKSIZE * 6];
+    sinput[tid] += input[index + BLOCKSIZE * 7];
+    // sinput[tid] = input[index] + input[index + 1] + input[index + 2] + input[index + 3];
+    // sinput[tid] += input[index + 4 * blockDim.x] + input[index + 4 * blockDim.x + 1] + input[index + 4 * blockDim.x + 2] + input[index + 4 * blockDim.x + 3];
     __syncthreads();
 
     if (tid < 512) sinput[tid] += sinput[tid + 512];
@@ -174,7 +210,6 @@ __global__ void coalesce_add(float *input, float *ans) {
     }
 }
 
-
 int main (int argc, char **argv) {
     printf("CUDA reduciton test\n");
 
@@ -185,12 +220,14 @@ int main (int argc, char **argv) {
     float *input = new float[N];
     float *output = new float[N];
     float *ans = new float[1];
+    int ans_ref = 0;
     float *input_device = NULL, *ans_device = NULL, *output_device = NULL;
 
-    for (uint16_t i = 0; i < N; i++) {
-        input[i] = 1.0f;
-    }
     ans[0] = 0.0f;
+    for (uint16_t i = 0; i < N; i++) {
+        input[i] = i;
+        ans_ref += i;
+    }
 
     cudaMalloc(&input_device, sizeof(float) * N);
     cudaMalloc(&output_device, sizeof(float) * N);
@@ -205,8 +242,10 @@ int main (int argc, char **argv) {
 
     cudaMemcpy(ans, ans_device, sizeof(float), cudaMemcpyDeviceToHost);
     // cudaMemcpy(input, input_device, sizeof(float) * N, cudaMemcpyDeviceToHost);
-    printf("atomic add ans: %f\n", ans[0]);
-    // printArray(input, N);
+    printf("add ans: %f, ans_ref: %d\n", ans[0], ans_ref);
+    // printArray(input, BLOCKSIZE);
+
+    assert(ans_ref == ans[0]);
 
     return 0;
 }

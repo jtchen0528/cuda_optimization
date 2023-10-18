@@ -1,13 +1,13 @@
 ## Reduction
 ### Single Block
-algo|Interleaved|Interleaved_2 | blocked | blocked | half_threads | unroll_last| unroll_last | coalesce
----|---|---|---|---|---|---|---|---
-sm|N|N|N|Y|Y|Y|Y|Y
-GridDim|1|1|1|1|1|1|1|1
-N|1024|1024|1024|1024|2048|2048|2048|8192
-T|5.056us|3.169us|2.688us|3.360us|3.392us|3.104us|2.976us|3.072us
-Perf|5.056us|3.169us|2.688us|3.360us|1.696us|1.552us|1.488us|0.384us
-speedup|1x|1.6x|1.9x|1.5x|3.0x|3.3x|3.4x|13.2x
+algo|Interleaved|Interleaved_2 | blocked | blocked | half_threads | unroll_last| unroll_all | l1 cache add | coalesce
+---|---|---|---|---|---|---|---|---|---
+sm|N|N|N|Y|Y|Y|Y|Y|Y
+GridDim|1|1|1|1|1|1|1|1|1
+N|1024|1024|1024|1024|2048|2048|2048|8192|8192
+T|5.056us|3.169us|2.688us|3.360us|3.392us|3.104us|2.976us|3.680us|3.456us
+Perf|5.056us|3.169us|2.688us|3.360us|1.696us|1.552us|1.488us|0.460us|0.432us
+speedup|1x|1.6x|1.9x|1.5x|3.0x|3.3x|3.4x|11x|11.7x
 
 ## Matrix Multiplication
 algo|naive|tiled 
@@ -65,3 +65,10 @@ algo|transpose Naive|transpose coleased|transposed coleased no bank conflict
 ---|---|---|---
 N|1024*1024|1024*1024|1024*1024
 T|71,264ns|26,720ns|21,088ns
+
+## histogram
+algo|naive|sm
+---|---|---
+SM|N|Y
+N|1024*1024|1024*1024
+T|52,961ns|25,024ns

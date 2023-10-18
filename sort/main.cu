@@ -9,12 +9,13 @@
 #include <cuda_runtime.h>
 #include <cuda_profiler_api.h>
 #include <cooperative_groups.h>
+#include "bitonic_sort.h"
 
 using namespace cooperative_groups;
 
 const int WARPSIZE = 32;
 const int WARPSIZE_LOG2 = 5;
-const int BLOCKDIM = 32;
+const int BLOCKDIM = 16;
 const int BLOCKSIZE = BLOCKDIM * BLOCKDIM;
 
 void printArray(float* A, int N) {
@@ -23,6 +24,14 @@ void printArray(float* A, int N) {
     }
     std::cout << std::endl;
 }
+
+void printArrayInt(int* A, int N) {
+    for (int i = 0; i < N; i++) {
+        std::cout << A[i] << " ";
+    }
+    std::cout << std::endl;
+}
+
 
 void check1DArray(float* A, float *B, int N) {
     bool ans = true;
@@ -80,6 +89,12 @@ __inline__ __device__ void swap_float(float *A, int i, int j) {
     float tmp = A[i];
     A[i] = A[j];
     A[j] = tmp;
+}
+
+__inline__ __device__ void swap_float_no_tmp(float *A, int i, int j) {
+    A[i] += A[j];           //  a + b,   b
+    A[j] = A[i] - A[j];     //  a + b,   a
+    A[i] -= A[j];            //  b ,   a
 }
 
 __inline__ __device__ void swap_float_volatile(volatile float *A, int i, int j) {
@@ -246,12 +261,12 @@ __global__ void odd_even_merge_sort_sm(float *A, int N) {
             int curr_stride_4 = curr_stride << 2;
             if ((tidx % (curr_stride_4)) < curr_stride) {
                 if (smA[tidx] > smA[tidx + curr_stride]) {
-                    swap_float(smA, tidx, tidx + curr_stride);
+                    swap_float_no_tmp(smA, tidx, tidx + curr_stride);
                 }
             }
             else if ((tidx % (curr_stride_4)) >= (curr_stride_4 - curr_stride)) {
                 if (smA[tidx] > smA[tidx - curr_stride]) {
-                    swap_float(smA, tidx, tidx - curr_stride);
+                    swap_float_no_tmp(smA, tidx, tidx - curr_stride);
                 }
             }
             curr_stride >>= 1;
@@ -262,7 +277,7 @@ __global__ void odd_even_merge_sort_sm(float *A, int N) {
     for (int stride = (N >> 1); stride >= 1; stride >>= 1) {
         if (tidx % (stride << 1) < stride) {
             if (smA[tidx] > smA[tidx + stride]) {
-                swap_float(smA, tidx, tidx + stride);
+                swap_float_no_tmp(smA, tidx, tidx + stride);
             }
         }
         __syncthreads();
@@ -273,10 +288,15 @@ __global__ void odd_even_merge_sort_sm(float *A, int N) {
     __syncthreads();
 }
 
-__device__ void odd_even_merge_sort_first_levels(volatile float *smA, int N, int tidx) {
-
+__global__ void odd_even_merge_sort_first_levels(float *A) {
     // A[idx] = 0;
-    for (int stride = 1; stride < N; stride <<= 1) {
+    __shared__ float smA [BLOCKSIZE];
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int tidx = threadIdx.x;
+    smA[tidx] = A[idx];
+    __syncthreads();
+
+    for (int stride = 1; stride < (BLOCKSIZE >> 1); stride <<= 1) {
         int curr_stride = stride;
         while (curr_stride >= 1) {
             int curr_stride_2 = curr_stride << 1;
@@ -285,32 +305,22 @@ __device__ void odd_even_merge_sort_first_levels(volatile float *smA, int N, int
                 if (smA[tidx] > smA[tidx + curr_stride]) {
                     swap_float_volatile(smA, tidx, tidx + curr_stride);
                 }
+                // smA[tidx] = 1;
             }
             else if ((tidx % (curr_stride_4)) >= (curr_stride_4 - curr_stride)) {
                 if (smA[tidx] > smA[tidx - curr_stride]) {
                     swap_float_volatile(smA, tidx, tidx - curr_stride);
                 }
+                // smA[tidx] = 0;
             }
             curr_stride >>= 1;
             __syncthreads();
+            // break;
         }
     }
-    
-}
-
-__global__ void odd_even_merge_sort_multi_block(float *A, int N) {
-    __shared__ float smA [BLOCKSIZE];
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int tidx = threadIdx.x;
-    smA[tidx] = A[idx];
-    __syncthreads();
-
-    odd_even_merge_sort_first_levels(smA, blockDim.x, tidx);
 
     A[idx] = smA[tidx];
-    __syncthreads();
 }
-
 
 
 
@@ -364,15 +374,15 @@ void merge_sort(float *&A, float *&scratch, int N) {
 int main (int argc, char **argv) {
     printf("CUDA exclusive scan test\n");
 
-    int N = BLOCKSIZE * 1;
+    int N = BLOCKSIZE * 8;
 
     int blocks = (N + BLOCKSIZE - 1) / BLOCKSIZE;
 
-    float *input = new float[N];
+    int *input = new int[N];
     float *output = new float[N];
     float *output_ref = new float[N];
     float *input_ref = new float[N];
-    float *input_device = NULL, *output_device = NULL;
+    int *input_device = NULL, *output_device = NULL;
 
     for (int i = 0; i < N; i++) {
         input[i] = N - i;
@@ -392,7 +402,7 @@ int main (int argc, char **argv) {
     // printArray(input, N);
     sort_serial(input_ref, output_ref, N);
     // printArray(input, N);
-    // printArray(output_ref, N);
+    printArray(output_ref, N);
 
     cudaMalloc(&input_device, sizeof(float) * N);
     cudaMalloc(&output_device, sizeof(float) * N);
@@ -404,13 +414,15 @@ int main (int argc, char **argv) {
     // void *kernelArgs[] = { (void *)&input_device, (void *)&N};
 
     // cudaLaunchCooperativeKernel((void*)sort_naive_multi_block, blocks, BLOCKSIZE, kernelArgs);
-    sort_naive <<<blocks, BLOCKSIZE>>> (input_device, N);
+    // odd_even_merge_sort_multi_block <<<blocks, BLOCKSIZE>>> (input_device, N);
+    // odd_even_merge_sort_multi_block(input_device, N);
+    Kernel_driver(input_device, N, blocks, BLOCKSIZE >> 1);
     // merge_sort(input_device, output_device, N);
     cudaDeviceSynchronize();
 
-    cudaMemcpy(output, input_device, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    cudaMemcpy(input, input_device, sizeof(int) * N, cudaMemcpyDeviceToHost);
 
-    // printArray(output, N);
+    // printArrayInt(input, N);
 
     check1DArray(output, output_ref, N);
 
