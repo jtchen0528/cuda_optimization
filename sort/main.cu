@@ -374,9 +374,9 @@ void merge_sort(float *&A, float *&scratch, int N) {
 int main (int argc, char **argv) {
     printf("CUDA exclusive scan test\n");
 
-    int N = BLOCKSIZE * 8;
+    int N = BLOCKSIZE * BLOCKSIZE;
 
-    int blocks = (N + BLOCKSIZE - 1) / BLOCKSIZE;
+    int blocks = (N + BLOCKSIZE * 2 - 1) / BLOCKSIZE * 2;
 
     int *input = new int[N];
     float *output = new float[N];
@@ -402,7 +402,7 @@ int main (int argc, char **argv) {
     // printArray(input, N);
     sort_serial(input_ref, output_ref, N);
     // printArray(input, N);
-    printArray(output_ref, N);
+    // printArray(output_ref, N);
 
     cudaMalloc(&input_device, sizeof(float) * N);
     cudaMalloc(&output_device, sizeof(float) * N);
@@ -416,7 +416,7 @@ int main (int argc, char **argv) {
     // cudaLaunchCooperativeKernel((void*)sort_naive_multi_block, blocks, BLOCKSIZE, kernelArgs);
     // odd_even_merge_sort_multi_block <<<blocks, BLOCKSIZE>>> (input_device, N);
     // odd_even_merge_sort_multi_block(input_device, N);
-    Kernel_driver(input_device, N, blocks, BLOCKSIZE >> 1);
+    Kernel_driver(input_device, N, blocks, BLOCKSIZE);
     // merge_sort(input_device, output_device, N);
     cudaDeviceSynchronize();
 

@@ -13,6 +13,7 @@
 #include <cooperative_groups.h>
 
 #include "CycleTimer.h"
+#include "bitonic_sort.h"
 
 const int WARPSIZE = 32;
 const int WARPSIZE_LOG2 = 5;
@@ -85,9 +86,7 @@ int main (int argc, char **argv) {
     printf("CUDA findKmin test\n");
 
     int N = BLOCKSIZE * BLOCKSIZE;
-    int k = 20;
-
-    int blocks = (N + BLOCKSIZE - 1) / BLOCKSIZE;
+    int k = BLOCKSIZE * BLOCKSIZE / 2;
 
     int *input = new int[N];
     int *output = new int[1];
@@ -121,16 +120,20 @@ int main (int argc, char **argv) {
     kernelDuration = kernelEndTime - kernelStartTime;
     printf("ans_ref_sort = %d,  %.3f ms\n", ans_ref_sort, 1000.f * kernelDuration);
 
-    cudaMalloc(&input_device, sizeof(float) * N);
+    cudaMalloc(&input_device, sizeof(int) * N);
 
-    cudaMemcpy(input_device, input, sizeof(float) * N, cudaMemcpyHostToDevice);
-
+    cudaMemcpy(input_device, input, sizeof(int) * N, cudaMemcpyHostToDevice);
+    int blocks = (N + BLOCKSIZE * 2 - 1) / BLOCKSIZE * 2;
+    kernelStartTime = CycleTimer::currentSeconds();
+    Kernel_driver(input_device, N, blocks, BLOCKSIZE);
+    cudaDeviceSynchronize();
+    kernelEndTime = CycleTimer::currentSeconds();
     // histogram_sm<<<blocks, BLOCKSIZE>>>(input_device, output_device, N);
-    // cudaDeviceSynchronize();
-
-    // cudaMemcpy(output, output_device, sizeof(float) * BINSIZE, cudaMemcpyDeviceToHost);
+    cudaMemcpy(output, input_device, sizeof(int) * k, cudaMemcpyDeviceToHost);
     // cudaMemcpy(input, input_device, sizeof(float) * N, cudaMemcpyDeviceToHost);
-
+    int ans_bitonic_sort = output[k - 1];
+    kernelDuration = kernelEndTime - kernelStartTime;
+    printf("ans_ref_sort = %d,  %.3f ms\n", ans_ref_sort, 1000.f * kernelDuration);
     // printArray(output, BINSIZE);
 
     // check1DArray(output, output_ref, BINSIZE);
