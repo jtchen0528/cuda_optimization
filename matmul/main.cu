@@ -10,8 +10,8 @@
 
 // Refer: https://developer.nvidia.com/blog/efficient-matrix-transpose-cuda-cc/
 
-const int WARPSIZE = 32;
-const int BLOCKDIM = 32;
+const int WARPSIZE = 16;
+const int BLOCKDIM = 16;
 
 void printArray(float* A, int N) {
     for (int i = 0; i < N; i++) {
@@ -137,9 +137,9 @@ int main (int argc, char **argv) {
     // uint16_t N = BLOCKDIM * BLOCKDIM;
     // uint16_t P = BLOCKDIM * BLOCKDIM;
 
-    uint16_t M = BLOCKDIM * BLOCKDIM;
-    uint16_t N = BLOCKDIM * BLOCKDIM;
-    uint16_t P = BLOCKDIM * BLOCKDIM;
+    uint16_t M = BLOCKDIM * BLOCKDIM * 4;
+    uint16_t N = BLOCKDIM * BLOCKDIM * 4;
+    uint16_t P = BLOCKDIM * BLOCKDIM * 4;
 
     dim3 blockDim(BLOCKDIM, BLOCKDIM, 1);
     dim3 gridDim((P + BLOCKDIM - 1) / BLOCKDIM, (M + BLOCKDIM - 1) / BLOCKDIM, 1);

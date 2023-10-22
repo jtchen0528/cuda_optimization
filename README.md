@@ -10,13 +10,13 @@ Perf|5.056us|3.169us|2.688us|3.360us|1.696us|1.552us|1.488us|0.460us|0.432us
 speedup|1x|1.6x|1.9x|1.5x|3.0x|3.3x|3.4x|11x|11.7x
 
 ## Matrix Multiplication
-algo|naive|tiled 
----|---|---
-sm|N|Y|Y
-GridDim|1024|1024|1024
-N|1024 * 1024|1024 * 1024
-T|2.717ms|1.854ms
-speedup|1x|1.5x
+algo|naive|tiled|tiled
+---|---|---|---
+sm|N|Y|Y|Y
+GridDim|1024|1024|1024|256
+N|1024 * 1024|1024 * 1024|1024 * 1024
+T|2.717ms|1.854ms|1.615ms
+speedup|1x|1.5x|
 <!-- Perf|5.056us|3.169us
 speedup|1x|1.6x|1.9x -->
 
@@ -72,3 +72,15 @@ algo|naive|sm
 SM|N|Y
 N|1024*1024|1024*1024
 T|52,961ns|25,024ns
+
+
+## Matrix Multiplication 2
+algo|naive|naive_coalesce|tiled|tiled_occupancy|tiled_arith_boost
+---|---|---|---|---|---
+sm|N|N|Y|Y|Y
+GridDim|1024|1024|1024|512|64
+N|1024 * 1024|1024 * 1024|1024 * 1024|1024 * 1024|1024 * 1024
+T|20,411,545ns|2,336,544ns|1,771,237ns|605,375ns|373,472ns
+speedup|1x|
+<!-- Perf|5.056us|3.169us
+speedup|1x|1.6x|1.9x -->
